@@ -1,0 +1,465 @@
+\documentclass{article}
+\usepackage{amsmath} % this needs to be after documentclass
+% this is preamble; this like document info and package information goes here
+\title{Robot Localization Draft}
+\author{QI MC GH}
+\date{\today}
+
+\begin{document}
+\maketitle % this command executes the preamble; moving it after abstract will allocate a complete page for abstract
+
+\begin{abstract}
+Robot localization using low cost on-board sensors in a known environment.
+\end{abstract}
+
+Robot localization is the problem of estimating a robot’s coordinates relative to an external reference frame. The robot is given a map of its environment, but to localize itself relative to this map it needs to consult its sensor data.
+
+More specifically the problem known a s \textit{global-localization} will be addressed.
+
+\section{Sensor Information}
+Linear acceleration and rotation velocity is being measured by on board a capacitive micro-electromechanical system(MEMS) sensor. The sensor being used is MPU-6050 made by InvenSense Inc. which contains 3 axis accelerometer and 3 axis gyroscope. This sensor is connected to Arduino via a I2C, which is an asynchronous serial communication protocol.
+
+In the most sensitive settings the accelerometer can detect $\pm2g$ linear acceleration, where $g$ is $9.81ms^{-2}$ the gravity of the Earth. Similarly in the most sensitive settings the gyroscope can detect $\pm250$ degree per second(dps) angular velocity. During motion the sensor outputs a proportional voltage that is converted to a signed 16bit value using an analog to digital(ADC) converter. The 16 bit signed integer can represent 65535 values ranging from -32768 to 32767. When accelerometer experiencing $+2g$ linear acceleration in any axis the ADC converts voltage to 32767, and ADC outputs 32767 when experiencing $-2$. In the most sensitive settings to find the acceleration in terms of $g$ we need to divided the ADC value by 16386. 
+
+In the most sensitive settings the for each degree of rotation per second ADC produces 131 when gyroscope is set to 250 dps sensitivity. So we need to divided the ADC value by 131 to find the rotational velocity in terms of degree. The accelerometer can be set to sense $\pm4g$, $\pm8g$ and $\pm16g$, and the gyroscope can be set to sense 500, 1000 and 2000 dps. Higher sensitively results in lower accuracy since the sensor has to map the same 65535 values to a wider range of possible values.
+
+Current hardware setup output one line of that contains the timestamp in microsecond, 3 axis ADC value from accelerometer and 3 axis ADC value from Gyroscope. 
+
+Temp Note:
+The ADC will output values proportional to the force it's experiencing(We expect it to be linear, but need to account for non linearity). At its lowest sensitivity the accelerometer can detect $\pm 2g$, which is converted to 16 bit ADC. We have to represents 4g range using 65535 possible values. $65535 / 4 = 16384$. Each 1g change will induce 16384 increment or decrements out of ADC. -2g will induce -32767 from ADC, and +2g will induce 32768 from ADC. In other words, $4 / 65535 = 0.000061$, each time LSB(Least Significant Bit - the right most bit) changes 1, the gravity increases by 0.000061.
+
+Nyquist frequency: Is our sampling rate hight enough? We are moving the accelerometer in a periodic motion - less than 1Hz a second, and we are sampling at 206Hz, therefore well above the Nyquest sampling rate. The motion we are measuring can not exceed 103Hz according to Nyquest sampling rule. Therefore we can be certain there is not aliasing error in our sampled signal. We have to represents $pm 250 degree / sec$. For each $degree /sec$, we have 65535 / 500 = 131 increment.
+
+\section{Initial work}
+
+Accelerometer produces linear acceleration. Linear acceleration is the second derivative of displacement. Therefore integrating acceleration values received from the sensor twice will produces displacement value. Integration can be approximated by cumulative discrete summation since acceleration values are being collected on discrete timestamps. 
+
+$v = \int a \,dt$
+
+$s = \int v \,dt$
+
+We can use rectangular method, where we approximate the area under the curve by calculating the size of the rectangle formed by (x1, y2) and (x2, y2). To improve the approximation Trapezoidal rule is used where we add the half of successive triangle.
+
+Gyroscope produces angular velocity therefore integrating it only once will produce angular displacement.
+
+(Is gravity compensation necessary to find the linear acceleration for 2d space? We can do gravity compensation using gyroscope.)
+
+There are two main issues in this approach. MEMS sensors do not have very high signal-to-noise therefore sensor is always outputting small changes even when the sensor is stationary~\cite{hanly_2016} which would build up in the integration process.
+
+\subsection{Explanation of accumulated noise}
+
+The signal generated when no motion occurs is called white noise(zero mean, and uncorrelated). Noises are iid. Normally distributed with dynamic variance. The variance grows with time and it depends on the type of integration method. 
+
+Each white noise is a random variable represented by N. ith white noise is represented by $N_i$. Since its normally related with mean zero, $E(N_i) = E(N) = 0$. Since it has finite variance, $Var(N_i) = Var(N) = \sigma^2$
+
+Integrate the white noise over time t using rectangular method, $ \sum{N_i \delta t}$
+
+Expected value of integration, $E(\sum{N_i \delta t}) = \sum{E(N_i \delta t)} = \sum{\delta t E(N_i)} = \delta t \sum{E(N_i)} = \delta t \sum{E(N)} = \delta t n E(N) = \delta t n 0 = 0$
+
+Variance of the result of integration, $Var(\sum{N_i \delta t}) =  \sum{Var(N_i \delta t)} = \sum{Var(N_i \delta t)} = \sum{(\delta t)^2 Var(N_i)} = (\delta t)^2\sum{Var(N_i)} = (\delta t)^2\sum{Var(N)} = (\delta t)^2 n Var(N) =  (\delta t)^2 n \sigma^2 $
+
+The variance of the result of the integration is growing with time.
+
+This is measured in three related units. Angle random walk, power spectral density and fast Fourier transform.
+
+MPU 6050 FFT 0.005 $\frac{degree / sec}{\sqrt(Hz)}$.
+
+MPU 6050 FFT(change time unit) 0.005 * 3600 = 18 $\frac{degree / h}{\sqrt(Hz)}$.
+
+MPU 6050 ARW 18 / 60  = 0.3 $degree / \sqrt h$.
+
+This means after 1 hour the standard deviation of the orientation error will be 0.3 degree.
+After 2 hour the standard deviation of the orientation error will be $\sqrt(2) * 0.3 = 0.42 $ degree.
+
+
+$ARW (degree / \sqrt h) = \frac{1}{60} FFT \frac{degree / h}{\sqrt{Hz}}$
+
+Current setting $\pm 250 degree / sec$
+
+
+
+Angle random walk has the following relationship with 
+
+Bias Stability - Allan Variance
+https://www.semanticscholar.org/paper/Statistics-of-atomic-frequency-standards-Allan/a043f03ec53e19067e2ccedfaeec40aa514e2d3d?p2df
+
+
+
+As the sensor is stationary 
+
+Another issue is the error in approximating integration using a summation of discrete time steps. There has been studies that used Trapezoidal Method~\cite{seifert2007implementing} to improve error margin. In this study other method will be investigated, such as Midpoint, Simpson's, and Boole's method.
+
+(We may not need this: Using the projection of gravity vector onto other axis accelerometer can obtain rotational information. Rotational information based on this system do no have any drift where is rotation based on gyroscope has drift. Combining rotational information from accelerometer and gyroscope using a filter, i.e. complimentary filter, allows for a very stable rotation detection. But since we are confining our robot to 2d plane only there is no projection of gravity vector along other axis therefore we can not use this method. )
+
+https://www.analog.com/media/en/technical-documentation/application-notes/AN-1057.pdf
+
+http://www.geekmomprojects.com/gyroscopes-and-accelerometers-on-a-chip/
+
+https://www.geekmomprojects.com/mpu-6050-dmp-data-from-i2cdevlib/
+
+We need the sensor to align with the body frame. Calculate offset.
+
+Possible source of errors from sensor,
+\begin{enumerate}
+\item offset error: this error can be split between stability performance (drift while the sensor remains in invariant conditions), and repeatability (error between two measurements in similar conditions separated by varied conditions in between)
+\item scale factor error: errors on first order sensitivity due to non repeatabilities and non linearities
+\item misalignment error: due to imperfect mechanical mounting
+\item cross axis sensitivity: parasitic measurement induced by solicitation along an axis orthogonal to sensor axis
+\item noise: dependent on desired dynamic performance
+\item environment sensitivity: mainly sensitivity to thermal gradients and accelerations
+\end{enumerate}
+
+\section{FIR Filter}
+FIR filters are represented via difference equation.
+
+Prior work on sensor MPU6050 assessment https://arxiv.org/pdf/1608.07053.pdf
+
+List of papers that worked with MPU6050,
+
+https://ieeexplore.ieee.org/abstract/document/7969859
+
+https://dl.acm.org/doi/abs/10.1145/2927929.2927943
+
+https://aip.scitation.org/doi/abs/10.1063/5.0002901
+
+Frequency response of accelerometer
+
+https://www.analog.com/en/products/landing-pages/001/accelerometer-specifications-definitions.html
+
+https://blog.endaq.com/accelerometer-specifications-decoding-a-datasheet
+
+https://www.analog.com/en/products/landing-pages/001/accelerometer-specifications-definitions.html
+
+https://borang.umy.ac.id/index.php/jrc/article/view/8165
+
+https://ieeexplore.ieee.org/abstract/document/8623031/figures
+
+https://journal.umy.ac.id/index.php/jrc/article/view/10014
+
+\section{Promising work}
+
+https://yanhangpublic.github.io/ridi/index.html
+
+\section{Probabilistic Robotics Book}
+The key idea in probabilistic robotics is to represent uncertainty explicitly using the calculus of probability theory. Put differently, instead of relying on a single “best guess” as to what might be the case, probabilistic algorithms represent information by probability
+distributions over a whole space of guesses. All algorithms in this book are based Bayes rule, and its temporal extension known as Bayes filters. Each chapter introduces an algorithm and it's strength and weakness.
+
+Notes on information and decision theory.
+\subsection{Chapter 1}
+Uncertainty in robotics perception can some many sources,
+\begin{enumerate}
+    \item Dynamic Environment
+    \item Sensor uncertainty
+    \item Uncertainty in robot actuation caused by control noise, wear and tear or mechanical failure
+    \item Uncertainty caused by internal models and algorithmic approximations
+\end{enumerate}
+
+Only 2, 3 and part of 4 will be addressed. Managing uncertainty is the goal of this book. Robot perception problem is a state estimation using sensor data. The estimation is represented using a probability distribution. 
+
+Probabilistic robotics seamlessly integrates models with sensor data. Probabilistic approaches tend to be more robust in the face of
+sensor limitations and model limitations. In comparison to traditional model-based robotic techniques, probabilistic algorithms have weaker requirements on the accuracy of the robot’s models, thereby relieving the programmer from the insurmountable burden to come up with accurate models.
+
+Limitations: Computational complexity(less efficient algorithm) and need to approximate(Rarely we have compact parametric model as good approximation).
+
+(From section 1.6) In many ways, probabilistic robotics falls in between model-based and behavior-based techniques. In probabilistic robotics, there are models, but they are assumed to be incomplete and insufficient for control. There are also sensor measurements, but they too are assumed to be incomplete and insufficient for control. Through the integration of both, models and sensor measurements, a control action can
+be devised. Statistics provides the mathematical glue to integrate models and sensor measurements.
+
+\subsection{Chapter 2 Recursive State Estimation}
+Robot perception problem is a state estimation using sensor data. The estimation is represented using a probability distribution which is calculated using Bayes filter. State estimation addresses the problem of estimating quantities from sensor data that are not directly observable, but that can be inferred. Probabilistic state estimation algorithms compute belief distributions over possible world states.
+
+Sensors carry only partial information about those quantities, and their measurements are corrupted by noise. State estimation seeks to recover state variables from the data.
+
+In probabilistic robotics, quantities such as
+sensor measurements, controls, and the states of a robot and its environment are all modeled as random variables. Collectively will be referred to as state random variable.
+
+let x be a state of any thing that we need to track. Could be the location of the robot, of if a door is open or close. Let y be sensor reading.
+
+\begin{align}  \label{eu_eqn}
+P(state_a | sensor) 
+&= \frac{P(sensor \cap state_a)}{P(sensor)} \\
+&= \frac{P(sensor | state_a)P(state_a)}{P(sensor)} \\
+&= \frac{P(sensor | state_a)P(state_a)}{\sum_iP(sensor \cap state_i)} \\
+&= \frac{P(sensor | state_a)P(state_a)}{\sum_iP(sensor | state_i)P(state_i)} 
+\end{align}
+
+Equation 1 is known as \ref{eu_eqn} is Bayes theorem.
+$P(state_a)$ is known as Prior distribution of the state variable.
+
+$P(sensor | state_a)$ is the likelihood what is the probability of observing $state_a$ given our sensor data. For example, what's the probability of sensor detecting the door is open given it is open/close.
+
+Now that the denominator $P(sensor)$ is always the same no matter what the sensor detects. Therefore we can consider it as a normalizing constant.
+
+In this book, entropy will be used in robotic information gathering, so as to express the information a robot may receive upon executing specific actions. Chapter 17.
+
+State is all aspects of robot and it's environment that is being tracked. Some states are dynamic(such as location of the robot) and some states are static(such as environment). Each state is a random variable. For example the state of a door can be represented by a random variable X whose sample space is {open, close}. Each object or each features of each object will be represented by a state variable. The state of a robot can be a multivariate random variable that follows truncated(since the support do not span the number line) multivariate normal distribution and represents the location relative to a global coordinate frame. State or the random variable at time t will be represented by $X_t$ where $t = 0, 1, 2 ...$ and robot starts operation at $t = 0$.
+
+A state is called complete if it's the best predictor of the future state. Completeness entails that knowledge of past state, measurements or control signals carry no additional information that would help us predict the future state more accurately.
+
+\subsubsection{Probability of state}
+Nothing prior to $X_t$ may influence the stochastic evolution of future state $X_{t+1}$, and temporal process that meet these condition are known as Markov chain.
+
+Since there are large number of things that might affect the robot, we chose to track only a subset of them. 
+
+Perception/Measurement captures the state. Perception is the process by which the robot uses its sensors to obtain information about the state of interest. These measurements will be denoted by $z_t$
+
+Control data changes the states. Usually robot is asserting force to change the environment, and even it is not we will assume the robot is executing a control action. The control actions will be denoted by $u$. $u_t$ is the control data the causes the state change from $t-1$ to $t$
+
+Perception increases increases robot's knowledge. Executing control tends to induce a loss of knowledge due to inherent noise in robot actuation and stochastic of robot environment. 
+
+Robot measured and executes control action concurrent.
+
+\subsubsection{State transition probability}
+The state transition distribution characterizes how state changes over time, possibly as the effect of robot controls.
+
+At first it may appear that the state $x_t$ may have emerged based on prior past state, controls and measurements. So the probability distribution of $x_t$ will be $p(x_t | x_{0:t-1}, z_{1:t-1}, u_{1:t})$. Note that we arrive at $x_t$ after executing control $u_t$ but have not yet incorporated $z_t$ into $x_t$.
+
+Since $x_{t-1}$ is a complete state, it incorporates all states $x_{0:t-1}$, control signals $u_{1:t-1}$ and measurements $z_{1:t-1}$.
+
+So to calculate $p(x_t | x_{0:t-1}, z_{1:t-1}, u_{1:t})$, we only need to know the control signal $u_t$ that lead to $x_t$ and the prior state $x_{t-1}$.
+
+$p(x_t | x_{0:t-1}, z_{1:t-1}, u_{1:t}) = p(x_t | x_{t-1}, u_t)$
+
+Here we are saying $x_t$ is conditionally independent from $x_{0:t-2}$, $u_{1:t-1}$ and $z_{1:t-1}$ given we know about $u_t$ and $x_{t-1}$.  $x_t$ is stochastically dependent on $x_{t_1}$ and $u_t$.
+
+$x_t$ is generated stochastically from $x_{t-1}$. Sometimes state transition do not depend on the time index $t$, in which we
+
+Page 25 : Not sure how to interpret it time invariant.
+
+\subsubsection{Measurement Probability}
+The measurement distribution characterizes how measurements are governed by states.
+
+One might also want to model the process by which measurements are being generated. Again, if $x_t$ is complete, we have an important conditional independence, which tells us no past measurements and control would provide us additional information,
+
+$p(z_t | x_{0:t}, z_{1:t-1}, u_{1:t}) = p(z_t | x_t)$
+
+Which means after arrive at $x_t$ we can calculate $p(x_t)$.
+
+For example, if we have a state variable that represents if a door is open or close, and if $x_t$ is a open door, we can calculate how likely we are to observe an open door. It can be thought of as a measurements as a noisy project of state.
+
+Measurement $z_t$ depends stochastically on $x_t$.
+\textbf{Such temporal generative model is also known as hidden Markov model or dynamic Bayes network.}
+
+\subsubsection{Prediction and Measurement update}
+Probability distribution of $x_t$ conditioned on all past measurements and past controls.
+$p(x_t |z:{1:t}, u_{1:t}) = bel(x_t)$
+
+Note that we have incorporated measurement at time $t$ while calculating $p(x_t)$, but sometimes we want to exclude $z_t$. 
+
+Which brings us,
+$p(x_t |z_{1:t-1}, u_{1:t}) = \overline{bel}(x_t)$
+
+This is often called prediction since we only incorporated the control signal into calculating $p(x_t)$ (and previous state posterior), but not the measurements after executing the control signal $z_t$.
+
+Calculating $bel(x_t)$ from $\overline{bel}_(x_t)$ is called correction or the measurement update.
+
+\subsubsection{Bayes Filter}
+
+\textbf{Update Rule}
+
+$p(x_t |z_{1:t}, u_{1:t})$ is calculated using Bayes filter from $p(x_{t-1} |z_{1:t-1}, u_{1:t-1})$ along with $u_t$ and most recent measurement $z_t$.
+
+Control update/prediction: Calculate $p(x_t |z_{1:t-1}, u_{1:t})$ by multiplying $p(x_{t-1} |z_{1:t-1}, u_{1:t-1})$ and the state transition probability $p(x_t | x_{t-1}, u_t)$. This is similar to theorem of total probability.
+
+Measurement update/Correction: Multiplies $p(x_t |z_{1:t-1}, u_{1:t})$ by the probability that the measurement $z_t$ have been observed, known as measurement probability $p(z_t | x_t)$
+
+given the posterior, control signal and measurement update, first we calculate the prediction using the control signal and prior belief over $x_{t-1}$, and then calculate the use the prediction as our prior to calculate the posterior 
+
+This is done for all possible outcome of $x_t$ to calculate the normalizing constant.
+
+$p(x_0)$ can be a point mass of uniform distribution.
+
+Prediction state: Given posterior $p(x_{t-1} | u_{1:t-1}, z_{1:t-1})$ and control $u_t$ and measurement $z_t$, calculate prediction state $p(x_t | u_{1:t}, z_{1:t-1})$
+
+Multiplies state transition probability and $p(x_{t-1} | u_{1:t-1}, z_{1:t-1})$ to find the prediction state.
+
+$p(x_t | u_{1:t}, z_{1:t-1}) = \sum_{x_{t-1}} p(x_t | u_t, x_{t-1}) p(x_{t-1} | z_{1:t-1}, u_{1:t-1})$
+
+$p(x_t | u_{1:t}, z_{1:t-1}) = \sum_{x_{t-1}} p(x_t | u_t, x_{t-1}) p(x_{t-1})$
+
+Measurement update/correction. Multiply two probability: Using $p(x_t | u_{1:t}, z_{1:t-1})$ as prior, and measurement probability $p(z_t | x_t)$ to calculate $p(x_t | u_{1:t}, z_{1:t})$ which is our posterior(and input for the next update rule)
+
+$p(x_t | u_{1:t}, z_{1:t}) = \eta p(z_t | x_t) p(x_t | u_{1:t}, z_{1:t-1})$
+
+\subsubsection{Implementation}
+
+Needs atleast three distribution $p(x_0)$, state transition probability $p(x_t | x_{t-1}, u_t)$(Chapter 5) and measurement probability $p(z_t | x_t)$(Chapter 6) Chapter 3 and 4 talks about the distribution $p(x_t | u_{1:t}, z_{1:t-1})$ and $p(x_t | u_{1:t}, z_{1:t})$ follows.
+
+The Markov assumption postulates that past and future data are independent
+if one knows the current state $x_t$.
+
+Markov property refers to the memoryless property of a stochastic process. The term Markov assumption is used to describe a model where the Markov property is assumed to hold, such as a hidden Markov model. A discrete-time stochastic process satisfying the Markov property is known as a Markov chain. [Markov Process Wiki]
+
+The Bayes filter makes a Markov assumption according to which the state
+is a complete summary of the past. This assumption implies the belief is
+sufficient to represent the past history of the robot.
+
+Is that why we can write $p(x_{t-1} | z_{1:t-1}, u_{1:t-1})$ as $p(x_{t-1})$ in the prediction step?
+
+Bayes filter estimates the state recursively. The next two chapters discuss two popular families of recursive state estimation techniques that are both derived from the Bayes filter.
+
+\subsection{Chapter 3}
+
+Gaussian filters constitute the earliest tractable implementations of the Bayes filter for continuous spaces.
+
+In this version of Bayes filter, the prior $p(x_t | u_{1:t}, z_{1:t-1})$ at prediction step and posterior $p(x_t | u_{1:t}, z_{1:t})$ at measurement step are represented by multivariate Gaussian distribution.
+
+Gaussian distribution for univariate random variable $x$.
+
+$\phi(x) = \frac{1}{\sqrt{2\pi \sigma^2}} \exp\{-\frac{1}{2}(\frac{x-\mu}{\sigma})^2\}$
+
+Multivariate Gaussian distribution for univariate random variable $\vec{x}$.
+
+$\phi(\vec{x}) = \frac{1}{\sqrt{2\pi |\Sigma|}}\exp\{-\frac{1}{2}(\vec{x} - \vec{\mu})^T\Sigma^{-1}(\vec{x} - \vec{\mu})\}$
+
+The state random variable is multivariate and follows multivariate Gaussian distribution with mean vector $\vec{\mu}$ and covariance matrix $\Sigma$. Covariance matrix is a quadratic matrix that is symmetric and positive semi definite.
+
+Gaussian distributions are poor match for estimation problems where multiple hypothesis exists (multiple modes are required)
+Moment parameterization, ifrst moment is mean, second moment is covariance, other moments are zoer.
+Natural/Canonical parameterization
+
+
+\subsubsection{Kalman Filter}
+Bayes filter using moments parameterization with linear dynamics(Does it mean state transition?) and measurement function. The state variable needs to be continuous. In Kalman filter, the distributions are characterized by a mean vector and covariance matrix.
+
+\subsubsection{Kalman Filter Assumptions}
+
+So far we are assuming Markov assumption holds(The Markov assumption postulates that past and future data are independent if one knows the current state $x_t$.)
+
+1.
+The state transition probability $p(x_t | u_t, x_{t-1})$ must be a linear function in its arguments with added Gaussian noise. This is expressed by the following equation,
+
+$x_t = A_t x_{t-1} + B_t u_t + \epsilon_t$
+
+Here $x_t$ and $x_{t-1}$ are state vectors and $u_t$ is the control vector at time $t$. 
+
+$A_t$ and $B_t$ are matrices. $A_t$ is a square matrix of size $n \times n$, where $n$ is the dimension of the state vector $x_t$. $B_t$ is of size $n \times m$, with $m$ being the dimension of the control vector $u_t$. By multiplying the state and control vector with the matrices $A_t$ and $B_t$, respectively, the state transition function becomes linear in its arguments.
+
+$\epsilon_t \sim \mathcal{N}(\vec{0},R_t)$
+
+$E(x_t) = E(A_t x_{t-1} + B_t u_t + \epsilon_t) = A_t x_{t-1} + B_t u_t$
+
+$Cov(x_t) = Cov(A_t x_{t-1} + B_t u_t + \epsilon_t) = Cov(\epsilon_t) = R_t$
+
+$p(x_t | u_t , x_{t-1}) \sim \mathcal{N}(A_t x_{t-1} + B_t u_t,R_t)$
+
+State transition probability,
+$p(x_t | u_t , x_{t-1}) = \frac{1}{\sqrt{2\pi |R_t|}}\exp\{-\frac{1}{2}(\vec{x} - (A_t x_{t-1} + B_t u_t))^TR_t^{-1}(\vec{x} - (A_t x_{t-1} + B_t u_t))\}$
+
+2.
+The measurement probability $p(z_t | x_t)$ must also be linear in its arguments,with added Gaussian noise.
+
+$z_t = C_t x_t + \delta_t$
+
+$\delta_t \sim \mathcal{N}(\vec{0},Q_t)$
+
+$E(z_t) = E(C_t x_t + \delta_t) = C_t x_t$
+
+$Cov(z_t) = Cov(C_t x_t + \delta_t) = Q_t$
+
+$z_t \sim \mathcal{N}(C_t x_t,Q_t)$
+
+$p(z_t | x_t) \sim \mathcal{N}(C_t x_t,Q_t)$
+
+Measurement probability,
+$p(z_t | x_t) = \frac{1}{\sqrt{2\pi |Q_t|}}\exp\{-\frac{1}{2}(\vec{x} - C_t x_t)^TQ_t^{-1}(\vec{x} - C_t x_t)\}$
+
+3.
+$p(x_0)$ needs to follow multivariate Gaussian as well. We will start with mean $\mu_0$ and covariance $\Sigma_0$.
+
+$p(x_0) = \frac{1}{\sqrt{2\pi |\Sigma_0|}}\exp\{-\frac{1}{2}(\vec{x} - \mu_0)^TQ_t^{-1}(\vec{x} - \mu_0)\}$
+
+$p(x_{t-1} | u_{t-1}, z_{1-t})$ is represented by $\mu_{t-1}$ and $\Sigma_{t-1}$
+
+\textbf{Prediction/Control Update step} 
+Modifies the belief according to an action/control data. This step increases uncertainty in robot's belief.
+
+prediction $p(x_t | u_{1:t}, z_{1:t-1})$ will be represented by $\overline{\mu}$ and $\overline{\Sigma}$
+
+Deterministic version of state transition
+$x_t = A_t x_{t-1} + B_t u_t + \epsilon_t$ becomes $\overline{\mu}_t = A_t \mu_{t-1} + B_t u_t + \epsilon_t$
+
+\textbf{Covariance Extrapolation Equation}
+
+$\overline{\Sigma}_t = A_t\Sigma_{t-1}A_t^T + R_t$
+
+The update of the covariance considers the fact that states depend on previous states through the linear matrix $A_t$. This matrix is multiplied twice into the covariance, since the covariance is a quadratic matrix.
+\textbf{These are called prediction/transition/state extrapolation equation. We are extrapolating next state from current state using control signal}
+
+\textbf{Measurement update step}
+Sensor data is integrated into modified belief. This step decreases uncertainty in robot's belief.
+
+Every filter cycle we calculate $z_t$ and $Cov(Z_t) = Q_t$. (Correctness?)
+Measurement uncertainty parameter is provided by equipment vendor, or it can be derived by measurement equipment calibration
+ 
+Example of measurement uncertanity: The radar measurement uncertainty depends on several parameters such as SNR (Signal to Nose Ratio), beam width, bandwidth, time on target, clock stability and more. Every radar measurement has different SNR, beam width and time on target. Therefore, that radar calculates the measurement uncertainty for each measurement and reports it to the tracker.
+
+
+Before we incorporate the measurement with our prior, we need to calculate Kalman gain. It specifies the degree to which the measurement is incorporated into the new state estimate, in a way that will become clearer in Chapter 3.2.4. It is calculated in each iteration which depends on measurement precision.
+
+To find $p(x_t | u_{1:t}, z_{1:t})$ we will calculate $\mu_t$ and $\Sigma_t$.
+
+$z_t = C_t x_t + \delta_t$ becomes $z_t = C_t \overline{\mu}_t + \delta_t$
+
+The variance of the measurement errors $Q_t$  is actually the measurement uncertainty.
+
+\textbf{State Update Equation}
+
+$\mu_t = \overline{\mu}_t + K_t ( z_t - C_t \overline{\mu}_t)$ 
+
+\textbf{Covariance Update Equation.}
+
+$\Sigma_t = (I - K_t C_t) \overline{\Sigma}_t$
+
+Page 43 mid section about the last 2 lines.
+
+
+Innovation: the difference between actual measurement$z_t$ and the expected measurement $C_t \overline{\mu}_t$
+
+\textbf{Kalman Gain}
+Kalman gain defines the weight of the past estimation and the weight of the measurement
+
+Kalman gain tells you how much I want to change my estimate by given a measurement.
+
+\textbf{Kalman Gain Equation}
+
+$K_t = \overline{\Sigma}_t C_t^T (C_t \overline{\Sigma}_t C_t^T + Q_t)^{-1}$
+
+$\mu_t = \overline{\mu}_t + K_t ( z_t - C_t \overline{\mu}_t)$ 
+
+When measurement uncertainty $Q_t$ is large and predicted uncertainty $\Sigma_t$ is small then  $K_t$ is small. When measurement uncertainty $Q_t$ is small and predicted uncertainty $\Sigma_t$ is large then $K_t$ is large.
+
+
+
+
+If Kalman gain is high estimated error is much larger than measurement error. 
+
+\subsubsection{Extended Kalman Filter}
+
+\subsection{Chapter 4}
+\subsection{Chapter 5}
+Parametric probabilistic models of mobile robots.
+\subsection{Chapter 6}
+Non parametric probabilistic models of mobile robots.
+\subsection{Chapter 7 Localization Markov and Gaussian}
+Ch 7 and 8 combine the basic estimation algorithms with the probabilistic models discussed in the previous two chapters.
+\subsection{Chapter 8 Localization Grid and Monte Carlo}
+\subsection{Ch 9 - 13 Mapping}
+\subsection{Ch 14 - 17 Planning and Control}
+Ch 16 Coastal Navigation
+
+\section{Signal Processing}
+http://www.dspguide.com/ch1.htm
+
+Digital filters are used for two general purposes: (1) Signal separation - which is separation of signals that have been combined , and (2) Signal restoration - which is restoration of signals that have been distorted in some way. 
+
+Low pass filter allows low frequency data to flow through and filter out the high frequency.A low-pass filter is designed to block all frequencies above the
+cutoff frequency (the stopband), while passing all frequencies below (the
+passband). For example, accelerometer can pick up minute vibration which can be thought of as rapidly changing signal or high frequency signal. Low pass filter will not allow the high frequency signal to pass through. Movement along an axis is low frequency data which is our what we are interested in a low pass filter will allow it to pass through.
+
+Low pass filter will remove fast movements(jitters), and high pass filter will remove small movements.
+
+\section{Kalman Filter}
+
+\bibliographystyle{plain}
+\bibliography{bibliography.bib}
+\end{document}
